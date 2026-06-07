@@ -8,6 +8,7 @@ import type { EmbeddingProvider } from '../types.js'
 import { memoryToObservation } from '../state/memory-utils.js'
 import { recordAccessBatch } from './access-tracker.js'
 import { logger } from "../logger.js";
+import { getAgentId, isAgentScopeIsolated } from "../config.js";
 
 let index: SearchIndex | null = null
 let vectorIndex: VectorIndex | null = null
@@ -328,6 +329,7 @@ export function registerSearchFunction(sdk: ISdk, kv: StateKV): void {
       cwd?: string
       format?: string
       token_budget?: number
+      agentId?: string
     }) => {
       const idx = getSearchIndex()
 
@@ -346,6 +348,22 @@ export function registerSearchFunction(sdk: ISdk, kv: StateKV): void {
       }
       const projectFilter = typeof data.project === 'string' && data.project.trim().length > 0 ? data.project.trim() : undefined
       const cwdFilter = typeof data.cwd === 'string' && data.cwd.trim().length > 0 ? data.cwd.trim() : undefined
+      // #817: agent-scope isolation. mem::search backs REST /search,
+      // memory_recall and recall_context. Without filtering here a
+      // worker booted with AGENT_ID=B + AGENTMEMORY_AGENT_SCOPE=isolated
+      // could read A's memories — the cross-agent leak the issue
+      // documented. Mirrors the smart-search pattern: wildcard "*"
+      // bypasses, explicit agentId pins, isolated mode falls back to
+      // the worker's own AGENT_ID.
+      const isolated = isAgentScopeIsolated();
+      const explicitAgentId =
+        typeof data.agentId === "string" && data.agentId.trim().length > 0
+          ? data.agentId.trim()
+          : undefined;
+      const wildcardAgent = explicitAgentId === "*";
+      const filterAgentId = wildcardAgent
+        ? undefined
+        : explicitAgentId ?? (isolated ? getAgentId() : undefined);
       const format = typeof data.format === 'string' ? data.format : 'full'
       if (!['full', 'compact', 'narrative'].includes(format)) {
         throw new Error("mem::search: format must be one of 'full', 'compact', or 'narrative'")
@@ -447,13 +465,17 @@ export function registerSearchFunction(sdk: ISdk, kv: StateKV): void {
       const enriched: SearchResult[] = []
       for (let i = 0; i < candidates.length; i++) {
         const obs = obsResults[i]
-        if (obs) {
-          enriched.push({
-            observation: obs,
-            score: candidates[i].score,
-            sessionId: candidates[i].sessionId,
-          })
-        }
+        if (!obs) continue
+        // #817: enforce agent-scope after the observation/memory is
+        // loaded. The BM25 index doesn't carry agentId so the filter
+        // happens post-lookup. Wildcard ("*") and no-isolation paths
+        // resolved filterAgentId=undefined upstream and pass through.
+        if (filterAgentId !== undefined && obs.agentId !== filterAgentId) continue
+        enriched.push({
+          observation: obs,
+          score: candidates[i].score,
+          sessionId: candidates[i].sessionId,
+        })
       }
 
       void recordAccessBatch(

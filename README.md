@@ -226,9 +226,7 @@ You explain the same architecture every session. You re-discover the same bugs. 
 npx @agentmemory/agentmemory
 ```
 
-> **New in v0.9.26** — Hotfix: first-boot crash on missing index manifest ([#797](https://github.com/rohitg00/agentmemory/issues/797)) now self-heals instead of throwing on `manifest.v`.
->
-> **v0.9.25** — Eleven breaking regressions closed (cross-provider fallback 404, `triggerVoid` removal in iii-sdk 0.11.2, summarize XML in markdown fences, pi `tool_input/tool_output` field mismatch, viewer graph 500 on 11k+ nodes, agent-sdk recursion guard race under `Promise.all`, obsidian-export missing-id crash, iii runtime pin auto-fallback, import-jsonl legacy session re-key). Added: sharded BM25/vector index persistence with manifest commit/rollback ([@Rokurolize](https://github.com/Rokurolize) [#762](https://github.com/rohitg00/agentmemory/issues/762)), smart-search followup-rate diagnostic ([#771](https://github.com/rohitg00/agentmemory/issues/771)). Drop-in upgrade, no breaking changes. Full notes in [CHANGELOG.md](CHANGELOG.md).
+Latest release notes: [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
