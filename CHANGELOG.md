@@ -23,6 +23,7 @@ Hotfix wave on top of v0.9.27. Three real-world bug reports against the freshly-
 ### Docs
 
 - **README "New in vX.Y.Z" callout block removed.** That pattern needed a per-release bump every wave and went stale fast. Latest release notes link points at CHANGELOG.md instead.
+- **`import-jsonl` users warned about Claude Code's `cleanupPeriodDays`.** Default 30-day auto-deletion of `~/.claude/projects/*.jsonl` doesn't affect anyone running the standard hook-wired install (each turn lands in iii state while the session is live), but fresh installs on months-old Claude Code histories silently lost anything older than 30 days. README now flags this with the three workarounds: cron the import, raise `cleanupPeriodDays`, or wire hooks.
 
 ### Known limitations carried into 0.9.28
 
