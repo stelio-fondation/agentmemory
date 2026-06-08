@@ -43,6 +43,11 @@ const DEFAULT_TIMEOUT_MS = 60_000;
  *                              thinking models). Set to "none" to ensure
  *                              message.content is populated instead of only
  *                              message.reasoning.
+ *   OPENAI_FORCE_STREAM     — Set to "true" to force streaming mode.
+ *                              Required for endpoints that only support streaming
+ *                              (e.g. opencode-go). When enabled, the response is
+ *                              parsed as SSE and both content + reasoning_content
+ *                              are collected from delta chunks.
  */
 export class OpenAIProvider implements MemoryProvider {
   name = "openai";
@@ -77,16 +82,15 @@ export class OpenAIProvider implements MemoryProvider {
 
   private async call(systemPrompt: string, userPrompt: string): Promise<string> {
     const url = buildChatUrl(this.baseUrl, this.isAzure, this.azureApiVersion);
+    const forceStream = getEnvVar("OPENAI_FORCE_STREAM") === "true";
     const body: Record<string, unknown> = {
       model: this.model,
       max_tokens: this.maxTokens,
-      // OpenAI API spec defines `stream` as defaulting to false, so omitting
-      // it should yield a JSON response. Some OpenAI-compatible proxies
-      // (notably 9Router < 0.4.56 — see decolua/9router#1260) default to
-      // text/event-stream when `stream` is absent, which crashes the
-      // `response.json()` call below with `Unexpected token 'd', "data: {"id"...`.
-      // Send it explicitly so non-spec endpoints route to non-streaming too.
-      stream: false,
+      // When OPENAI_FORCE_STREAM=true, send stream:true for endpoints that
+      // only support streaming (e.g. opencode-go). Otherwise send stream:false
+      // explicitly so non-spec proxies that default to text/event-stream
+      // still route to non-streaming JSON (see decolua/9router#1260).
+      stream: forceStream,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
@@ -128,6 +132,32 @@ export class OpenAIProvider implements MemoryProvider {
       throw new Error(`OpenAI API error (${response.status}): ${text}`);
     }
 
+    if (forceStream) {
+      // Streaming mode: parse SSE (text/event-stream) and collect delta chunks.
+      // Handles reasoning models (deepseek-v4-flash, etc.) that output
+      // reasoning_content in deltas rather than content.
+      const sseText = await response.text();
+      let fullContent = "";
+      let fullReasoning = "";
+      for (const line of sseText.split("\n")) {
+        if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
+        try {
+          const chunk = JSON.parse(line.slice(6));
+          const delta = (chunk as { choices?: Array<{ delta?: { content?: string; reasoning_content?: string } }> }).choices?.[0]?.delta;
+          if (delta?.content) fullContent += delta.content;
+          if (delta?.reasoning_content) fullReasoning += delta.reasoning_content;
+        } catch {
+          // Skip unparseable SSE lines
+        }
+      }
+      const result = fullContent || fullReasoning;
+      if (result) return result;
+      throw new Error(
+        `OpenAI streaming returned unexpected response: ${sseText.slice(0, 200)}`,
+      );
+    }
+
+    // Non-streaming mode: parse JSON response.
     const data = (await response.json()) as {
       choices?: Array<{
         message?: { content?: string; reasoning?: string; reasoning_content?: string };
@@ -138,9 +168,6 @@ export class OpenAIProvider implements MemoryProvider {
     if (content) {
       return content;
     }
-    // Fallback: some thinking models return reasoning but no content.
-    // DeepSeek V4 / Qwen3 / GLM / Kimi return `reasoning_content`;
-    // older OpenAI o-series + some compatibles return `reasoning`. #627
     const reasoning = message?.reasoning ?? message?.reasoning_content;
     if (reasoning) {
       return reasoning;
